@@ -48,7 +48,7 @@ if __name__ == '__main__':
 
 	# 2D array of Data x Channels
 	mT = m.transpose()
-
+	# Principle components of data
 	components = [np.dot(mT, evecs[:,i]) for i in range(10)]
 
 	freq, psd, ones = psd_and_bin(components[0], data['sample_rate'], 0, 4)
