@@ -4,7 +4,7 @@ Analysis of mystery on 8.2.0_44b.
 
 @author Yash Shah
 """
-import numpy as np, pickle, os
+import numpy as np, pickle, os, sys
 from matplotlib.pyplot import *
 import matplotlib.patches as mpatches
 from matplotlib.collections import PatchCollection
@@ -15,81 +15,41 @@ from timestream import timestream
 date = '20140921_010507'
 hdf5 = '/scratch/ngoecknerwald/resonance_timestreams/%s.hdf5' %date
 gain = '/scratch/ngoecknerwald/largepatch/gain/'
-cuts = '/data/pb1/neil/alpha_cut_all/%s.pkl' %date
+# cuts = '/data/pb1/neil/alpha_cut_all/%s.pkl' %date
+cuts = '/scratch/ngoecknerwald/resonance_timestreams/alpha_cut_yash/%s.pkl' %date
 hwMap = pickle.load(open('PB1_hardwaremap.pkl'))
-bIDs = np.array(hwMap['boloid'])
 
-def singleCase():
-    # Channel number for Bolo ID 8.2.0_44b
-    channel = 652
+tChan = np.array([hwMap['boloid'].index('8.2.0_%dt' %i) for i in range(1,92)])
+bChan = np.array([hwMap['boloid'].index('8.2.0_%db' %i) for i in range(1,92)])
+allChannels = np.concatenate((tChan, bChan))
 
-    d = libinspect.make_args('--input %s --gain %s --detrend 2 --nofft' %(
-        hdf5, gain))
-    data = libinspect.load_TOD(d, channels=[0, channel], do_PSD=True)
-    time = data['time']
+cut = pickle.load(open(cuts))
+flags = cut[0]
 
-    plot(data['channels'][channel]['raw_freq'],
-       data['channels'][channel]['raw_psd'])
-    yscale('log')
-    show()
-
-    # plot(data['channels'][channel]['freq_nohwps'],
-         # data['channels'][channel]['psd_nohwps'])
-    # yscale('log')
-    # show()
-
-    
-
-    # Demodulated data
-    # plot(data['channels'][channel]['freqs_demod'][0],
-    #    data['channels'][channel]['psds_demod'][0])
-    # plot(data['channels'][channel]['freqs_demod'][1],
-    #    data['channels'][channel]['psds_demod'][1])
-    # plot(data['channels'][channel]['freqs_demod'][2],
-    #    data['channels'][channel]['psds_demod'][2])
-    # yscale('log')
-    # show()
-
-
-def plotComponents(comps, freq, components):
-    figure()
-    for i in comps:
-        plot(freq, components[i], label='Component %d' %i)
-    legend(loc='upper left')
-    yscale('log')
-    show()
-
-
-def plotEigenAmps(comp, amplitudes, labels):
-    figure()
-    title('Eigenvector Amplitude of Component %d' %comp)
-    xlabel('Bolo ID')
-    ylabel('Eigenvector Amplitude')
-    plot(range(len(amplitudes[comp])), amplitudes[comp],
-        label='Component %d' %(comp + 1))
-    scatter(range(len(amplitudes[comp])), amplitudes[comp],
-        label='Component %d' %(comp + 1))
-    xticks(range(len(amplitudes[comp])), labels, rotation='vertical')
-    tight_layout()
-    axis('tight')
-    show()
-
+BPF_LO = 8.0
+BPF_HI = 15.0
 
 def plotWafer(ax):
-    wafer = np.arange(1, 92)
+    """Plot top and bottom pixels of wafer 8.2.0 on axis AX.
 
-    s = 1.0
-    xsep = 0.1
-    ysep = 0.1
-    hexSep = 14*s
-
+    Returns
+    -------
+    tpatches, bpatches : numpy.array
+        Numpy arrays of the top and bottom patches.
+    """
     def addSquare(ax, x0, y0, i, w):
+        """Add square I to AX at position (X0, Y0) with wafer number W. Returns
+        the matplotlib.patches patch plotted.
+        """
         x = x0 - i*s/2 - i*xsep/2
         y = y0 - i*s
         ax.text(x + s/2, y + s/2, str(wafer[w]), ha='center', va='center')
         return mpatches.Rectangle((x, y), s, s, picker=True)
 
     def wafer8_2_0(ax, x0, y0):
+        """Plot wafer 8.2.0 on AX at position (X0, Y0). Returns a numpy.array
+        of all matplotlib.patches plotted.
+        """
         patches = []
         w = 0
 
@@ -113,6 +73,13 @@ def plotWafer(ax):
 
         return np.array(patches)
 
+    wafer = np.arange(1, 92)
+
+    s = 1.0
+    xsep = 0.1
+    ysep = 0.1
+    hexSep = 14*s
+
     x0 = -s - xsep
     y0 = 0
 
@@ -124,18 +91,27 @@ def plotWafer(ax):
     return tpatches, bpatches
 
 
-def plotEigenGrid(comp, data, components, amplitudes, labels):
-    pixels = map(lambda s: s[6:], labels)
+def eigenGrid(labels, amplitudes, component, full=False):
+    """Plot and color an eigenvector amplitude grid.
 
+    Returns
+    -------
+    fig, ax : matplotlib Figure and Axis of the eigengrid
+
+    * tcolors, bcolors : numpy.array
+        Numpy arrays of the eigenvector amplitudes of the top and bottom
+        pixels, where 0.0 indicates a dark pixel (Only returned if full=True)
+    """
+    pixels = map(lambda s: s[6:], labels)
     tcolors = np.zeros(91)
     bcolors = np.zeros(91)
 
     for i, p in enumerate(pixels):
         num = int(p[:-1]) - 1
         if p[-1] == 't':
-            tcolors[num] = abs(amplitudes[comp][i])
+            tcolors[num] = abs(amplitudes[component][i])
         elif p[-1] == 'b':
-            bcolors[num] = abs(amplitudes[comp][i])
+            bcolors[num] = abs(amplitudes[component][i])
 
     fig, ax = subplots(figsize=(14, 7))
     tpatches, bpatches = plotWafer(ax)
@@ -147,57 +123,73 @@ def plotEigenGrid(comp, data, components, amplitudes, labels):
     lightColors = np.concatenate((tcolors[tcolors != 0.0],
                                   bcolors[bcolors != 0.0]))
 
-    lightCollection = PatchCollection(lightPatches, cmap=cm.jet, alpha=0.5)
+    lightCollection = PatchCollection(lightPatches, cmap=cm.jet, alpha=0.5,
+        picker=True)
     lightCollection.set_array(lightColors)
     ax.add_collection(lightCollection)
-
     darkCollection = PatchCollection(darkPatches, facecolors='white')
     ax.add_collection(darkCollection)
+    fig.colorbar(lightCollection)
 
-    colorbar(lightCollection)
     axis('equal')
-    setp(ax.get_xticklabels(), visible=False)
-    setp(ax.get_yticklabels(), visible=False)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_title('Eigenvector Amplitudes of Component %d' %component)
 
-    title('Eigenvector Amplitudes of Component %d' %comp)
-    savefig('bpfEigenGrids/grid%d.png' %comp, dpi=200)
-
-    close(fig)
-
-    # figure()
-    # plot(freq, components[comp], label='Component %d' %comp)
-    # title('Component %d' %comp)
-    # legend()
-    # yscale('log')
-    # savefig('eigenGrids/comp%d.png' %comp, dpi=200)
-    # close()
-
-    # figure()
-    # freq, psd, ones = psd_and_bin(components[comp], data['sample_rate'], 11, 13)
-    # plot(freq, psd)
-    # title('Component %d' %comp)
-    # xlabel('Frequency')
-    # ylabel('Power')
-    # yscale('log')
-    # margins(x=0.02, y=0.02)
-    # show()
-
-    # print 'Saved plots for component', comp
-    # show()
+    if full:
+        return fig, ax, tcolors, bcolors
+    else:
+        return fig, ax
 
 
-def plotCutGrid():
-    cut = pickle.load(open(cuts))
-    flags = cut[0]
+def plotEigenGrid(component, amplitudes, labels, save=False, loc=''):
+    """Plot the eigengrid of COMPONENT. Save the figure if SAVE and LOC."""
+    fig, ax = eigenGrid(labels, amplitudes, component)
+    saveOrShow(fig, save, loc, 'grid%d.png' % component)
 
-    tChan = np.array([hwMap['boloid'].index('8.2.0_%dt' %i) for i in range(1,92)])
-    bChan = np.array([hwMap['boloid'].index('8.2.0_%db' %i) for i in range(1,92)])
-    channels = np.concatenate((tChan, bChan))
 
-    numFlags = np.zeros(91 + 91)
-    for i in range(18, 39):
-        numFlags += (flags[channels][:,-1] & (1 << i)) >> i
+def plotEigenGridAndComponent(component, data, components, amplitudes, labels):
+    """Plot the eigengrid of COMPONENT, alongside the PSD of the component.
+    Click individual pixels to overlay a plot of their PSD on the plot of the
+    component's PSD; click the pixels again to remove their plot.
+    """
+    fig, ax, tcolors, bcolors = eigenGrid(labels, amplitudes, component, True)
+    lightChannels = np.concatenate((tChan[tcolors != 0.0],
+                                    bChan[bcolors != 0.0]))
 
+    # Component plot
+    fig2, ax2 = subplots()
+    freq, psd, ones = psd_and_bin(components[component],
+                                  data['sample_rate'], BPF_LO, BPF_HI)
+    ax2.plot(freq, psd, label='Component %d' %component)
+    ax2.set_title('Component %d' %component)
+    ax2.set_xlabel('Frequency')
+    ax2.set_ylabel('Power')
+    ax2.set_yscale('log')
+    ax2.margins(x=0.02, y=0.02)
+    lines = {}
+
+    def onpick(event):
+        channel = lightChannels[event.ind[0]]
+        boloid = hwMap['boloid'][channel]
+        if channel in lines:
+            lines[channel].remove()
+            lines.pop(channel)
+            print 'Removing', boloid
+        else:
+            freq, psd, ones = psd_and_bin(data['channels'][channel]['nohwps'],
+                data['sample_rate'], BPF_LO, BPF_HI)
+            lines[channel], = ax2.plot(freq, psd, label='Bolo ID %s' %boloid)
+            print 'Plotting', boloid
+        ax2.legend(loc='lower right')
+        ax2.margins(x=0.02, y=0.02)
+        fig2.canvas.draw()
+    fig.canvas.mpl_connect('pick_event', onpick)
+
+    show()
+
+
+def flagGrid(numFlags):
     fig, ax = subplots(figsize=(14, 7))
     tpatches, bpatches = plotWafer(ax)
     patches = np.concatenate((tpatches, bpatches))
@@ -214,95 +206,50 @@ def plotCutGrid():
     colorbar(collection, ticks=np.arange(cmin,cmax+1))
 
     def onpick(event):
-        channel = channels[event.ind[0]]
+        channel = allChannels[event.ind[0]]
         print '\nFlags for Bolo ID ' + hwMap['boloid'][channel] + ':'
         for i in range(18, 39):
             flag = (flags[channel] & (1 << i)) >> i
             if flag[-1]:
-                print '\x1b[31;1m%s - %s\x1b[0m' %(flag[-1], cut[1][i])
+                print '\x1b[31;1mBit %2d - %d - %s\x1b[0m' %(i, flag[-1], cut[1][i])
             else:
-                print '%s - %s' %(flag[-1], cut[1][i])
-                
-
+                print 'Bit %2d - %d - %s' %(i, flag[-1], cut[1][i])
     fig.canvas.mpl_connect('pick_event', onpick)
 
     axis('equal')
-    setp(ax.get_xticklabels(), visible=False)
-    setp(ax.get_yticklabels(), visible=False)
-    # savefig('flags/cutgrid.png', dpi=200)
-    # close(fig)
-    show()
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    return fig, ax
 
 
-def plotFlagGrid(flagBit):
-    cut = pickle.load(open(cuts))
-    flags = cut[0]
+def plotCutGrid(save=False, loc=''):
+    numFlags = np.zeros(91 + 91)
+    for i in range(18, 39):
+        numFlags += (flags[allChannels][:,-1] & (1 << i)) >> i
+    fig, ax = flagGrid(numFlags)
+    ax.set_title('All flags for %s' %date)
+    saveOrShow(fig, save, loc, 'cutgrid.png')
 
-    tChan = np.array([hwMap['boloid'].index('8.2.0_%dt' %i) for i in range(1,92)])
-    bChan = np.array([hwMap['boloid'].index('8.2.0_%db' %i) for i in range(1,92)])
-    channels = np.concatenate((tChan, bChan))
 
-    chanFlags = (flags[channels][:,-1] & (1 << flagBit)) >> flagBit
-
-    if np.any(chanFlags):
-        fig, ax = subplots(figsize=(14, 7))
-        tpatches, bpatches = plotWafer(ax)
-        patches = np.concatenate((tpatches, bpatches))
-
-        cmax = np.max(chanFlags)
-        cmin = np.min(chanFlags)
-
-        cmap = get_cmap('jet', cmax-cmin+1)
-
-        collection = PatchCollection(patches, cmap=cmap, alpha=0.5, picker=True)
-        collection.set_clim(vmin=cmin-0.5, vmax=cmax+0.5)
-        collection.set_array(chanFlags)
-        ax.add_collection(collection)
-        colorbar(collection, ticks=np.arange(cmin,cmax+1))
-
-        def onpick(event):
-            channel = channels[event.ind[0]]
-            print '\nFlags for Bolo ID ' + hwMap['boloid'][channel] + ':'
-            for i in range(18, 39):
-                flag = (flags[channel] & (1 << i)) >> i
-                if flag[-1]:
-                    print '\x1b[31;1mBit %2d - %d - %s\x1b[0m' %(i, flag[-1], cut[1][i])
-                else:
-                    print 'Bit %2d - %d - %s' %(i, flag[-1], cut[1][i])
-
-        fig.canvas.mpl_connect('pick_event', onpick)
-
-        axis('equal')
-        setp(ax.get_xticklabels(), visible=False)
-        setp(ax.get_yticklabels(), visible=False)
-        title('Flag %d - %s' %(flagBit, cut[1][flagBit]), fontsize=12)
-        savefig('flags/bit%d.png' %flagBit, dpi=200)
-
-        close(fig)
-        print 'Saved plots for bit %d' %flagBit
-        # show()
+def plotFlagGrid(flagBit, save=False, loc=''):
+    numFlags = (flags[allChannels][:,-1] & (1 << flagBit)) >> flagBit
+    if np.any(numFlags):
+        fig, ax = flagGrid(numFlags)
+        ax.set_title('Flag %d - %s' %(flagBit, cut[1][flagBit]), fontsize=12)
+        saveOrShow(fig, save, loc, 'bit%d.png' %flagBit)
     else:
         print 'No flags set for bit %d - %s' %(flagBit, cut[1][flagBit])
 
 
-# def plotPSD(channels, data):
-#     figure()
-#     for c in channels:
-#         plot(data['channels'][c]['freq_nohwps'],
-#              data['channels'][c]['psd_nohwps'], label=str(c))
-#     yscale('log')
-#     legend()
-#     show()
-
-
-def main():
+def mainPSD():
+    """Do a PCA using the PSDs of the data."""
     if os.path.isfile('data.pkl'):
         data = pickle.load(open('data.pkl'))
     else:
         d = libinspect.make_args('--input %s --gain %s --detrend 2 --nofft'
             +' --wafer %s' %(hdf5, gain, '8.2.0'))
         data = libinspect.load_TOD(d, do_PSD=True)
-
 
     ch = data['channels'].keys()
     labels = [hwMap['boloid'][c] for c in ch]
@@ -336,16 +283,10 @@ def main():
         70, 71, 74, 78]
 
 
-def plotPSD(ts, data):
-    freq, psd, ones = psd_and_bin(ts, data['sample_rate'], 11., 13.)
-    figure()
-    plot(freq, psd)
-    yscale('log')
-    margins(x=0.02, y=0.02)
-    show()
-
-
 def plotAllComponents(compPSD, initialComp = 0):
+    """Plot the PSD of each principle component.
+    Use up and down arrow keys to switch the plotted component.
+    """
     fig, ax = subplots()
     global num
     num = initialComp
@@ -372,25 +313,52 @@ def plotAllComponents(compPSD, initialComp = 0):
     show()
 
 
-def saveAllCompPSD(compPSD, anomalyComponents):
-    for i in anomalyComponents:
+def saveOrShow(fig, save, loc, filename):
+    """Depending on SAVE boolean, save a FIG to LOC+FILENAME, or show it."""
+    if save:
+        if loc:
+            fig.savefig(loc + filename, dpi=200)
+        else:
+            print 'Please supply save location'
+        close(fig)
+    else:
+        fig.show()
+
+def saveAllCompPSD(compPSD, components, loc):
+    """Save the PSDs of all principle COMPONENTS."""
+    for c in components:
         figure()
-        plot(compPSD[i][0], compPSD[i][1])
+        plot(compPSD[c][0], compPSD[c][1])
         yscale('log')
-        title('PSD of component %d' %i)
+        title('PSD of component %d' %c)
         xlabel('Frequency')
         ylabel('Power')
-        savefig('bpfEigenGrids/comp%d.png' %i, dpi=200)
-        print 'Saved component %d' %i
+        savefig('%scomp%d.png' %(loc, c), dpi=200)
         close()
+        print 'Saved component', c
+
+def saveAllEigenGrids(components, amplitudes, labels, loc):
+    """Save all eigengrids of COMPONENTS."""
+    for c in components:
+        plotEigenGrid(c, amplitudes, labels, save=True, loc=loc)
+        print 'Saved eigengrid of component', c
+
+def rms(x):
+    """Return the root-mean-square of X."""
+    return np.sqrt(np.mean(x**2))
+
+def out(s):
+    """Write string S to stdout."""
+    sys.stdout.write(s)
+    sys.stdout.flush()
 
 
 if __name__ == '__main__':
 
     if os.path.isfile('data_ts.pkl'):
-        print 'Loading data from data_ts.pkl...'
+        out('\nLoading data from data_ts.pkl...')
         data = pickle.load(open('data_ts.pkl'))
-        print 'Done.'
+        out('Done.\n')
     else:
         # d = libinspect.make_args('--input %s --gain %s --detrend 2 --nofft'
         #     +' --wafer %s' %(hdf5, gain, '8.2.0'))
@@ -401,29 +369,45 @@ if __name__ == '__main__':
             543, 672, 673, 549, 666, 509, 555, 684, 685, 558, 559, 688, 689,
             690, 563, 564, 565, 567, 568, 569, 570, 571, 572, 573, 574, 706,
             709, 585, 586, 678, 594, 595, 596, 603, 604, 605, 606, 677, 609,
-            550, 691, 619, 613, 562, 630, 631, 504, 506, 507, 508, 618, 510, 511
+            550, 691, 619, 613, 562, 630, 631, 504, 506, 507, 508, 618, 510,
+            511
         ]
-        d = libinspect.make_args('--input %s --gain %s --detrend 2 --nofft' %(hdf5, gain))
+        d = libinspect.make_args('--input %s --gain %s --detrend 2 --nofft' %(
+            hdf5, gain))
         data = libinspect.load_TOD(d, channels=ch8_2_0)
 
-    ch = data['channels'].keys()
+    channels = data['channels'].keys()
     time = data['time']
 
-    labels = [hwMap['boloid'][c] for c in ch]
+    labels = [hwMap['boloid'][channel] for channel in channels]
 
-    bpf = timestream.make_bpf(11., 13., n=1024, nyq=data['sample_rate']/2.)
-    # m = np.array([timestream.apply_filter(bpf, data['channels'][c]['hwpss']) for c in ch])
-    m = np.array([timestream.apply_filter(bpf, data['channels'][c]['nohwps']) for c in ch])
-    cov = np.cov(m)
-    evals, evecs = np.linalg.eig(cov)
-    mT = m.transpose()
-    components = [np.dot(mT, evecs[:,i]) for i in range(len(ch))]
+    bpf = timestream.make_bpf(BPF_LO, BPF_HI, n=1024, nyq=data['sample_rate']/2.)
+    dataMatrix = np.array([timestream.apply_filter(
+        bpf, data['channels'][channel]['nohwps']) for channel in channels])
 
-    n = np.linalg.norm(m, axis=1)
-    mNorm = np.array([m[i] / n[i] for i in range(len(m))])
-    amplitudes = [[np.dot(comp, ts) for ts in mNorm] for comp in components]
+    out('Computing principle components...')
+    covarianceMatrix = np.cov(dataMatrix)
+    evals, evecs = np.linalg.eig(covarianceMatrix)
+    components = [np.dot(dataMatrix.T, evecs[:,i]
+        ) for i in range(len(channels))]
+    components.sort(key=lambda x: rms(x), reverse=True)
+    out(' Done.\n')
 
-    compPSD = [psd_and_bin(ts, data['sample_rate'], 11., 13.) for ts in components]
+    out('Calculating eigenvector amplitudes...')
+    amplitudes = [[rms((np.dot(comp, ts) / np.dot(comp, comp)) * comp
+        ) for ts in dataMatrix] for comp in components]
+    out(' Done.\n')
 
-    anomalyComponents = [1, 2, 3, 4, 6, 7, 9, 10, 11, 13, 14, 15, 17, 18, 19,
-        22, 23, 33, 34]
+    out('Creating PSDs of components...')
+    compPSD = [psd_and_bin(ts, data['sample_rate'], BPF_LO, BPF_HI
+        ) for ts in components]
+    out(' Done.\n')
+
+    out('Creating PSDs of data...')
+    dataPSD = [psd_and_bin(data['channels'][c]['nohwps'], data['sample_rate'],
+        BPF_LO, BPF_HI) for c in channels]
+    out(' Done.\n')
+
+    bandFeatureComponents = [0]
+    spike12HzComponents = [1, 2, 3, 4, 6, 7, 9, 10, 11, 13, 14, 15, 17, 18, 19,
+        21, 22, 27, 28]
