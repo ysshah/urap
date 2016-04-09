@@ -4,10 +4,12 @@ Analysis of mystery on 8.2.0_44b.
 
 @author Yash Shah
 """
-import numpy as np, pickle, os, sys
+import numpy as np, pickle, os, sys, json
 from matplotlib.pyplot import *
 import matplotlib.patches as mpatches
+from matplotlib.widgets import CheckButtons
 from matplotlib.collections import PatchCollection
+from matplotlib.collections import RegularPolyCollection
 import AnalysisBackend.whwp.libinspect as libinspect
 from AnalysisBackend.whwp.lib_low_freq import psd_and_bin
 from timestream import timestream
@@ -223,6 +225,105 @@ def flagGrid(numFlags):
     return fig, ax
 
 
+def getOffsets():
+    s = 1.0
+    xsep = 0.1
+    ysep = 0.1
+
+    def patch(x0, y0):
+        offsets = []
+        for length in range(6,12):
+            x0 += s + xsep
+            for i in range(length):
+                x = x0 - i*s/2 - i*xsep/2
+                y = y0 - i*s
+                offsets.append([x, y])
+                y0 -= ysep
+            y0 += length * ysep
+        y0 -= ysep
+        for length in range(10, 5, -1):
+            x0 += (s + xsep) / 2
+            y0 -= s
+            for i in range(length):
+                x = x0 - i*s/2 - i*xsep/2
+                y = y0 - i*s
+                offsets.append([x, y])
+                y0 -= ysep
+            y0 += (length-1) * ysep
+        return offsets
+
+    return patch(0, 0) + patch(14, 0)
+
+
+def plotAllFlags():
+    fig, ax = subplots(figsize=(16,8))
+
+    offsets = getOffsets()
+
+    start = 22
+    numFlags = [(flags[allChannels][:,-1] & (1 << start)) >> start]
+
+    cmax = np.max(numFlags[0])
+    cmin = np.min(numFlags[0])
+    cmap = get_cmap('jet', cmax-cmin+1)
+
+    collection = RegularPolyCollection(
+        numsides=4,
+        rotation=np.pi/4,
+        sizes=(1000,),
+        linewidths = (1,),
+        offsets = offsets,
+        transOffset = ax.transData,
+        alpha=0.5,
+        cmap=cmap
+        )
+
+    collection.set_clim(vmin=cmin-0.5, vmax=cmax+0.5)
+
+    for i, w in enumerate(range(91) + range(91)):
+        ax.annotate(str(w + 1), offsets[i], ha='center', va='center')
+
+    subplots_adjust(left=0.2)
+
+    ax.add_collection(collection)
+    axis('equal')
+
+    collection.set_array(numFlags[0])
+    cb = colorbar(collection, ticks=np.arange(cmin,cmax+1))
+
+    rax = axes([0.05, 0.1, 0.1, 0.8])
+
+    status = [True, False, False]
+    check = CheckButtons(rax, ('22', '23', '24'), tuple(status))
+
+    def func(label):
+        bit = int(label)
+        i = bit - start
+        status[i] = not status[i]
+        if status[i]:
+            numFlags[0] += (flags[allChannels][:,-1] & (1 << bit)) >> bit
+        else:
+            numFlags[0] -= (flags[allChannels][:,-1] & (1 << bit)) >> bit
+
+        cmax = np.max(numFlags[0])
+        cmin = np.min(numFlags[0])
+        cmap = get_cmap('jet', cmax-cmin+1)
+
+        ax.collections[0].set_array(numFlags[0])
+        ax.collections[0].set_clim(vmin=cmin-0.5, vmax=cmax+0.5)
+        ax.collections[0].set_cmap(cmap)
+        cb.set_ticks(np.arange(cmin, cmax+1))
+        fig.canvas.draw()
+
+    check.on_clicked(func)
+    show()
+
+    # fig.subplots_adjust(left=0.2)
+    # rax = axes([0.05, 0.1, 0.1, 0.8])
+    # status = [True] + [False]*20
+    # check = CheckButtons(rax, [str(i) for i in range(18, 39)], status)
+
+
 def plotCutGrid(save=False, loc=''):
     numFlags = np.zeros(91 + 91)
     for i in range(18, 39):
@@ -353,12 +454,30 @@ def out(s):
     sys.stdout.flush()
 
 
+def dataToJSON(compPSD):
+    with open('data.csv', 'wb') as f:
+        f.write(','.join(['freq'] + ['comp%d' %c for c in range(len(compPSD))]) + '\n')
+        for i,freq in enumerate(compPSD[0][0]):
+            f.write(','.join([str(freq)] + [str(compPSD[c][1][i]) for c in range(len(compPSD))]) + '\n')
+    # d = {}
+    # d["freq"] = list(compPSD[0][0])
+    # for i in range(len(compPSD)):
+    #     d[i] = list(compPSD[i][1])
+
+def findOutliers(amplitudes, labels):
+    weight = 30
+    for i in range(len(amplitudes)):
+        outliers = amplitudes[i] > weight*np.median(amplitudes[i])
+        numOutliers = np.sum(outliers)
+        if numOutliers:
+            print 'Component %2d - %2d - %s' %(i, numOutliers, labels[outliers])
+
 if __name__ == '__main__':
 
     if os.path.isfile('data_ts.pkl'):
         out('\nLoading data from data_ts.pkl...')
         data = pickle.load(open('data_ts.pkl'))
-        out('Done.\n')
+        out(' Done.\n')
     else:
         # d = libinspect.make_args('--input %s --gain %s --detrend 2 --nofft'
         #     +' --wafer %s' %(hdf5, gain, '8.2.0'))
@@ -376,10 +495,10 @@ if __name__ == '__main__':
             hdf5, gain))
         data = libinspect.load_TOD(d, channels=ch8_2_0)
 
-    channels = data['channels'].keys()
+    channels = np.array(data['channels'].keys())
     time = data['time']
 
-    labels = [hwMap['boloid'][channel] for channel in channels]
+    labels = np.array([hwMap['boloid'][channel] for channel in channels])
 
     bpf = timestream.make_bpf(BPF_LO, BPF_HI, n=1024, nyq=data['sample_rate']/2.)
     dataMatrix = np.array([timestream.apply_filter(
@@ -400,14 +519,24 @@ if __name__ == '__main__':
 
     out('Creating PSDs of components...')
     compPSD = [psd_and_bin(ts, data['sample_rate'], BPF_LO, BPF_HI
-        ) for ts in components]
+        )[:2] for ts in components]
     out(' Done.\n')
 
     out('Creating PSDs of data...')
     dataPSD = [psd_and_bin(data['channels'][c]['nohwps'], data['sample_rate'],
-        BPF_LO, BPF_HI) for c in channels]
+        BPF_LO, BPF_HI)[:2] for c in channels]
     out(' Done.\n')
 
     bandFeatureComponents = [0]
     spike12HzComponents = [1, 2, 3, 4, 6, 7, 9, 10, 11, 13, 14, 15, 17, 18, 19,
         21, 22, 27, 28]
+
+    if False:
+        # Count number that principle components reduced to depending on weight
+        # of median comparison
+        for w in range(10, 101, 10):
+            count = 0
+            for i in range(len(amplitudes)):
+                if np.any(amplitudes[i] > w*np.median(amplitudes[i])):
+                    count += 1
+            print '%3d   %2d' %(w, count)
